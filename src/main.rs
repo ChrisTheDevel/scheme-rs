@@ -1,12 +1,15 @@
-use std::io;
+mod lexer;
+
 // stdlib imports
 use std::path::PathBuf;
 use std::{fs::read_to_string, path::Path};
 // external lib imports
-use anyhow::{Context, Result}; // error handling
+use anyhow::{anyhow, Context, Result}; // error handling
 use clap::Parser; // argument parsing
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+// internal imports
+use lexer::Lexer;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -24,17 +27,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn error(line: u32, message: &str) {
-    report(line, "", message);
-}
-
-fn report(line: u32, source: &str, message: &str) {
-    eprintln!("[line: {line}] Source: {source} - {message}");
-}
-
 fn run_repl() -> Result<()> {
     println!("starting REPL!");
     let mut rl = Editor::<()>::new()?;
+    // main repl loop
     loop {
         let readline = rl.readline(">> ");
         match readline {
