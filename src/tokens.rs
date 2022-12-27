@@ -1,7 +1,5 @@
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
-    /// any whitespace
-    Whitespace,
     /// a-z,A-Z,1-9,extended symbos "! $ % & * + - . / : < = > ? @ ^ _ ~" (a single "." is not a valid token though).
     /// cannot also start with number
     Identifier(String),
@@ -25,7 +23,7 @@ pub enum Token {
     // Literals
     Literal(LiteralKind),
     /// Unknown token. Input contains non-defined syntax, or that couldn't be parsed!
-    Unknown,
+    Error,
     // Last token generated. Every token stream should end with it.
     EOF, // end of file
 }
