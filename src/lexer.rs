@@ -43,6 +43,14 @@ impl<'a> Lexer<'a> {
         iter.next().unwrap_or(EOF_CHAR)
     }
 
+    // peeks the third char
+    fn third(&self) -> char {
+        let mut iter = self.chars.clone();
+        iter.next();
+        iter.next();
+        iter.next().unwrap_or(EOF_CHAR)
+    }
+
     fn is_eof(&self) -> bool {
         self.chars.as_str().is_empty()
     }
@@ -75,44 +83,104 @@ impl<'a> Lexer<'a> {
             Some(c) => c,
             None => return EOF,
         };
-        let token_kind = match first_char {
-            ';' => self.line_comment(),
-            '#' => match self.first() {
-                '!' => self.directive(),
-                '|' => self.block_comment(),
-                '(' => OpenVec,
-                // ';' => TODO datum comments
-                'u' => self.byte_vec(),
-                // #e,i,b,o,d,x => notation in numbers numbers
-                _ => Unknown,
-            },
-            '"' => self.string_literal()
+        // Based on some char patterns we will opportunistically try to consume more of the input.
+        // Every method used to consume further might however return `Token::Unknown` instead if they were
+        // unable to parse the consumed chars as expected.
+        let token_kind = match (first_char, self.first(), self.second(), self.third()) {
+            // Single char tokens
+            ('(', _, _, _) => OpenParen,
+            (')', _, _, _) => CloseParen,
+            ('[', _, _, _) => OpenSquareParen, // reserved for future syntax extensions
+            (']', _, _, _) => CloseSquareParen, // reserved
+            ('{', _, _, _) => OpenCurlyParen,  // reserved
+            ('}', _, _, _) => CloseCurlyParen, // reserved
+            ('\'', _, _, _) => Apost,          // denotes literal data
+            ('`', _, _, _) => Grave,           // denotes partially constant data
+            // comments
+            (';', _, _, _) => self.line_comment(),
+            ('#', '|', _, _) => self.block_comment(),
+            // directive
+            ('#', '!', _, _) => self.directive(),
+            ('#', c, _, _) if c == 't' || c == 'f' => self.boolean(),
+            // some list types
+            ('#', 'u', '8', '(') => self.bytevector(),
+            ('#', '(', _, _) => self.vector(),
+            (w, _, _, _) if w.is_whitespace() => self.whitespace(),
+            // identifiers
+            ('|', _, _, _) => self.pipe_identifier(),
+            (i, _, _, _) if is_valid_first_letter_ident(i) => self.identifier(i),
             _ => Unknown,
         };
 
         // if we've been unsuccessfull in  matching some known syntax,
-        Unknown
+        token_kind
     }
+
+    fn identifier(&mut self, first_letter: char) -> Token {
+        // we will now try to parse the first
+        let mut content = String::from(first_letter);
+        loop {
+            let next = self.first();
+
+            if next == '\n' {
+                break;
+            }
+            if is_identifier_char(next) {
+                // the char was a valid identificator char, continue on
+                content.push(self.bump().unwrap());
+            } else {
+                // we've encontered a nonvalid char!
+                // consume untill the next whitespace and return unknown
+                self.eat_while(|c| !c.is_whitespace());
+                return Token::Unknown;
+            }
+        }
+        Token::Identifier(content)
+    }
+    fn vector(&mut self) -> Token {
+        self.bump(); // throw away the '('
+        Token::OpenVec
+    }
+
+    fn bytevector(&mut self) -> Token {
+        self.bump(); // throw away the 'u'
+        self.bump(); // throw away the '8'
+        self.bump(); // throw away the '('
+        Token::OpenByteVec
+    }
+
+    fn boolean(&mut self) -> Token {
+        let content = self.take_while(|c| c.is_whitespace());
+        let c = &content;
+        if c == "t" || c == "true" || c == "f" || c == "false" {
+            Token::Literal(LiteralKind::Boolean(content))
+        } else {
+            Token::Unknown
+        }
+    }
+
+    fn pipe_identifier(&mut self) -> Token {
+        // throw away the '|'
+        self.bump();
+        let content = self.take_while(|c| c == '|');
+        let res = Token::Identifier(content);
+        self.bump();
+        res
+    }
+
+    fn whitespace(&mut self) -> Token {
+        self.eat_while(|c| c.is_whitespace());
+        Token::Whitespace
+    }
+
     fn string_literal(&mut self) -> Token {
         // throw away the '"'
         self.bump();
         let content = self.take_while(|c| !c.is_whitespace());
-        Token::Directive(content)
-    }
-
-    fn byte_vec(&mut self) -> Token {
-        // throw away the 'u'
+        let res = Token::Literal(LiteralKind::Str(content));
+        // trow away the second '"'
         self.bump();
-        // check that the next 2 chars are '8' and '('
-        let mut chars = self.chars.clone();
-        if chars.next().unwrap() == '8' && chars.next().unwrap() == '(' {
-            // if it indeed was a byte vec, then consume the chars
-            self.bump();
-            self.bump();
-            Token::OpenByteVec
-        } else {
-            Token::Unknown
-        }
+        res
     }
 
     fn line_comment(&mut self) -> Token {
@@ -141,6 +209,13 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// checks whether the letter i is a valid first letter of an identifier
+/// (can't be a number or invalid extended char)
+fn is_valid_first_letter_ident(c: char) -> bool {
+    !c.is_numeric() && (c.is_alphabetic() || EXTENDED_IDENT_CHARS.contains(&c))
+}
+
+/// checks whether a letter is a valid ident letter.
 fn is_identifier_char(c: char) -> bool {
     c.is_alphanumeric() || EXTENDED_IDENT_CHARS.contains(&c)
 }

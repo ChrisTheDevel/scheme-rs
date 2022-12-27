@@ -5,6 +5,8 @@ pub enum Token {
     /// a-z,A-Z,1-9,extended symbos "! $ % & * + - . / : < = > ? @ ^ _ ~" (a single "." is not a valid token though).
     /// cannot also start with number
     Identifier(String),
+    /// Identifier enclosed with '|', has some special rules in it's contents
+    PipeIdentifier(String),
     Comment(String),      // ;;comment to end of line
     BlockComment(String), // |# block comment #|
     Directive(String),    // #!directive
@@ -15,14 +17,13 @@ pub enum Token {
     CloseSquareParen, // Reserved
     OpenCurlyParen,   // Reserved
     CloseCurlyParen,  // Reserved
-    Apost,            // the ' char.
+    Apost,            // the ' char. Denotes literal data.
+    Grave,            // the ` char. Denotes partially constant data.
     // Open paren for some list types
     OpenVec,     // #(
     OpenByteVec, // #u8(
     // Literals
-    Literal {
-        literal_kind: LiteralKind,
-    },
+    Literal(LiteralKind),
     /// Unknown token. Input contains non-defined syntax, or that couldn't be parsed!
     Unknown,
     // Last token generated. Every token stream should end with it.
