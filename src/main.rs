@@ -1,5 +1,5 @@
 mod lexer;
-
+mod tokens;
 // stdlib imports
 use std::path::PathBuf;
 use std::{fs::read_to_string, path::Path};

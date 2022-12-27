@@ -4,128 +4,145 @@ use std::{iter::Peekable, str::Chars};
 // external imports
 use lazy_static::lazy_static;
 // internal imports
+use crate::tokens::{LiteralKind, Token};
 
 lazy_static! {
     /// extended identification chars
     static ref EXTENDED_IDENT_CHARS: HashSet<char> = HashSet::from(['!', '$', '%', '&', '*', '+', '-', '.', '/', ':', '<', '=', '>', '?', '@', '^', '_', '~']);
 }
 
+/// Directives that designate whether an identifier should use be case agnostic
+const DIRECTIVES: [&'static str; 2] = ["#!fold-case", "#!no-fold-case"];
+
+pub const EOF_CHAR: char = '\0';
+
+/// The Lexer. Taking heavy inspiration of the rustc_lexer Cursor struct
 pub struct Lexer<'a> {
-    input: Peekable<Chars<'a>>,
+    len_remaining: usize,
+    chars: Chars<'a>,
 }
 
+// Here we implement some tooling
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
-        let input = input.chars().peekable();
-        Self { input }
+        Self {
+            len_remaining: input.len(),
+            chars: input.chars(),
+        }
     }
 
+    // peeks the next char
+    fn first(&self) -> char {
+        self.chars.clone().next().unwrap_or(EOF_CHAR)
+    }
+
+    // peeks the second char
+    fn second(&self) -> char {
+        let mut iter = self.chars.clone();
+        iter.next();
+        iter.next().unwrap_or(EOF_CHAR)
+    }
+
+    fn is_eof(&self) -> bool {
+        self.chars.as_str().is_empty()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        self.chars.next()
+    }
+
+    fn take_while(&mut self, mut predicate: impl FnMut(char) -> bool) -> String {
+        let mut s = String::new();
+        while predicate(self.first()) && !self.is_eof() {
+            s.push(self.bump().unwrap());
+        }
+        s
+    }
+
+    fn eat_while(&mut self, mut predicate: impl FnMut(char) -> bool) {
+        while predicate(self.first()) && !self.is_eof() {
+            self.bump();
+        }
+    }
+}
+
+// here we define the syntax specific tooling
+impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Token {
         use Token::*;
-
-        let read_identifier = |l: &mut Lexer| -> Vec<char> {
-            let mut identifier = Vec::new();
-            while let Some(c) = l.input.peek() {
-                if is_identifier_char(*c) {
-                    identifier.push(*c);
-                    let _ = l.input.next();
-                } else {
-                    break;
-                }
-            }
-            identifier
+        // try consuming a char
+        let first_char = match self.bump() {
+            Some(c) => c,
+            None => return EOF,
+        };
+        let token_kind = match first_char {
+            ';' => self.line_comment(),
+            '#' => match self.first() {
+                '!' => self.directive(),
+                '|' => self.block_comment(),
+                '(' => OpenVec,
+                // ';' => TODO datum comments
+                'u' => self.byte_vec(),
+                // #e,i,b,o,d,x => notation in numbers numbers
+                _ => Unknown,
+            },
+            '"' => self.string_literal()
+            _ => Unknown,
         };
 
-        let c = self.input.next();
-        if c.is_none() {
-            return EOF;
-        }
+        // if we've been unsuccessfull in  matching some known syntax,
+        Unknown
+    }
+    fn string_literal(&mut self) -> Token {
+        // throw away the '"'
+        self.bump();
+        let content = self.take_while(|c| !c.is_whitespace());
+        Token::Directive(content)
+    }
 
-        let mut c = c.unwrap();
-        // get the next non_whitespace character
-        while c.is_whitespace() {
-            match self.input.next() {
-                Some(new_c) => c = new_c,
-                None => return EOF,
-            }
+    fn byte_vec(&mut self) -> Token {
+        // throw away the 'u'
+        self.bump();
+        // check that the next 2 chars are '8' and '('
+        let mut chars = self.chars.clone();
+        if chars.next().unwrap() == '8' && chars.next().unwrap() == '(' {
+            // if it indeed was a byte vec, then consume the chars
+            self.bump();
+            self.bump();
+            Token::OpenByteVec
+        } else {
+            Token::Unknown
         }
-        match c {
-            '(' => LParen,
-            '{' => LCParen,
-            '[' => LSParen,
-            ')' => RParen,
-            '}' => RCParen,
-            ']' => RSParen,
-            ';' => {
-                let mut comment = String::new();
+    }
 
-                while let Some(c) = self.input.peek() {
-                    if *c == '\n' {
-                        break;
-                    }
-                    comment.push(self.input.next().unwrap());
-                }
-                // TODO can I skip this cloning somehow?
-                Comment(comment.trim().into())
-            }
-            '"' => {
-                let mut s = String::new();
-                while let Some(c) = self.input.peek() {
-                    if *c == '"' {
-                        // throw away the '"'
-                        let _ = self.input.next();
-                        break;
-                    }
-                    s.push(self.input.next().unwrap());
-                }
-                StringLiteral(s)
-            }
-            '|' => {
-                let mut identifier = String::from(c);
-                while let Some(c) = self.input.peek() {
-                    if *c == '|' {
-                        identifier.push(self.input.next().unwrap());
-                        break;
-                    }
-                    identifier.push(self.input.next().unwrap());
-                }
-                Identifier(identifier)
-            }
-            _ => {
-                let mut identifier = String::from(c);
-                while let Some(c) = self.input.peek() {
-                    // TODO make rules for including identifier more specific
-                    if !is_identifier_char(*c) {
-                        break;
-                    }
-                    identifier.push(self.input.next().unwrap());
-                }
-                Identifier(identifier)
-            }
+    fn line_comment(&mut self) -> Token {
+        let content = self.take_while(|c| c != '\n');
+        Token::Comment(content)
+    }
+
+    fn block_comment(&mut self) -> Token {
+        // throw away the '|'
+        self.bump();
+        let mut content = String::new();
+        while self.first() != '|' && self.second() != '#' && !self.is_eof() {
+            content.push(self.bump().unwrap());
         }
+        // throw away the '|' and '#'
+        self.bump();
+        self.bump();
+        Token::BlockComment(content)
+    }
+
+    fn directive(&mut self) -> Token {
+        // throw away the '!'
+        self.bump();
+        let content = self.take_while(|c| !c.is_whitespace());
+        Token::Directive(content)
     }
 }
 
 fn is_identifier_char(c: char) -> bool {
     c.is_alphanumeric() || EXTENDED_IDENT_CHARS.contains(&c)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Token {
-    Identifier(String), // any sequence of letters, numbers and extended symbos "! $ % & * + - . / : < = > ? @ ^ _ ~" (a single "." is not a valid token though).
-    Comment(String),    // ;;comment to end of line, |# block comment #|
-    Directive(String),  // #!directive
-    // parenthesis
-    LParen,  // (
-    RParen,  // )
-    LSParen, // Reserved
-    RSParen, // Reserved
-    LCParen, // Reserved
-    RCParen, // Reserved
-    // Literals
-    StringLiteral(String),
-    // Last token generated
-    EOF, // end of file
 }
 
 #[cfg(test)]
@@ -151,7 +168,8 @@ mod test {
     fn parens() {
         expected_sequnce(
             &[
-                LParen, LParen, LParen, LParen, RParen, RParen, RParen, RParen,
+                OpenParen, OpenParen, OpenParen, OpenParen, CloseParen, CloseParen, CloseParen,
+                CloseParen,
             ],
             "(((())))",
         );
@@ -168,11 +186,11 @@ mod test {
     fn ident1() {
         expected_sequnce(
             &[
-                LParen,
+                OpenParen,
                 Identifier(String::from("+")),
                 Identifier(String::from("var1")),
                 Identifier(String::from("var2")),
-                RParen,
+                CloseParen,
             ],
             "(+ var1 var2)",
         );
@@ -197,13 +215,5 @@ mod test {
         for ident in idents {
             expected_sequnce(&[Identifier(String::from(ident))], ident);
         }
-    }
-
-    #[test]
-    fn test_string() {
-        expected_sequnce(
-            &[StringLiteral(String::from("testing"))],
-            r#"   "testing"    "#,
-        );
     }
 }
