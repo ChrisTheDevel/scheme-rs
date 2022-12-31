@@ -8,6 +8,8 @@ pub enum Token {
     Comment(String),      // ;;comment to end of line
     BlockComment(String), // |# block comment #|
     Directive(String),    // #!directive
+    DatumOpen(String),    // #number= - e.g #323=
+    DatumRef(String),     // #number#
     // parenthesis
     OpenParen,        // (
     CloseParen,       // )

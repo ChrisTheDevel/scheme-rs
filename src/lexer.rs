@@ -102,12 +102,17 @@ impl<'a> Lexer<'a> {
             ('}', _, _, _) => CloseCurlyParen, // reserved
             ('\'', _, _, _) => Apost,          // denotes literal data
             ('`', _, _, _) => Grave,           // denotes partially constant data
+            ('`', _, _, _) => Grave,           // denotes partially constant data
             // comments
             (';', _, _, _) => self.line_comment(),
             ('#', Some('|'), _, _) => self.block_comment(),
             // directive
             ('#', Some('!'), _, _) => self.directive(),
             ('#', Some(c), _, _) if c == 't' || c == 'f' => self.boolean(),
+            // datums
+            ('#', Some(c), _, _) if c.is_numeric() => self.datum(),
+            // litterals
+            ('"', _, _, _) => self.string_literal(),
             // some list types
             ('#', Some('u'), Some('8'), Some('(')) => self.bytevector(),
             ('#', Some('('), _, _) => self.vector(),
@@ -119,6 +124,22 @@ impl<'a> Lexer<'a> {
 
         // if we've been unsuccessfull in  matching some known syntax,
         token_kind
+    }
+
+    fn datum(&mut self) -> Token {
+        // we take all the numbers
+        let content = self.take_while(|c| c.is_numeric());
+        if content.len() == 0 {
+            Token::Error
+        } else if self.first() == Some('#') {
+            self.bump();
+            Token::DatumRef(content)
+        } else if self.first() == Some('=') {
+            self.bump();
+            Token::DatumOpen(content)
+        } else {
+            Token::Error
+        }
     }
 
     fn identifier(&mut self, first_letter: char) -> Token {
@@ -170,7 +191,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn string_literal(&mut self) -> Token {
-        let content = self.take_while(|c| !c.is_whitespace());
+        let content = self.take_while(|c| c != '"');
         let res = Token::Literal(LiteralKind::Str(content));
         // trow away the second '"'
         self.bump();
@@ -236,7 +257,11 @@ mod test {
                 tokens.push(token);
             }
         }
-        println!("{:?}", tokens);
+        println!("expected: {:?}", seq);
+        println!("actual:   {:?}", tokens);
+        if tokens.len() != seq.len() {
+            panic!("The amount of expected and actual tokens is not the same!");
+        }
 
         for (expected_token, actual_token) in seq.iter().zip(tokens) {
             assert_eq!(*expected_token, actual_token);
@@ -292,7 +317,7 @@ mod test {
         );
     }
     #[test]
-    fn test_multiple_ients() {
+    fn multiple_idents() {
         let idents = [
             "...",
             "+",
@@ -311,5 +336,55 @@ mod test {
         for ident in idents {
             expected_sequnce(&[Identifier(String::from(ident))], ident);
         }
+    }
+
+    #[test]
+    fn multiple_idents_one_str() {
+        let idents = r#"...   +   +soup+   <=?   ->string   a34kTMNs   lambda   list->vector   q   V17a   |two words|   |two\x20;words|   the-word-recursion-has-many-meanings"#;
+        let expected = &[
+            Identifier(String::from("...")),
+            Identifier(String::from("+")),
+            Identifier(String::from("+soup+")),
+            Identifier(String::from("<=?")),
+            Identifier(String::from("->string")),
+            Identifier(String::from("a34kTMNs")),
+            Identifier(String::from("lambda")),
+            Identifier(String::from("list->vector")),
+            Identifier(String::from("q")),
+            Identifier(String::from("V17a")),
+            Identifier(String::from("|two words|")),
+            Identifier(String::from(r#"|two\x20;words|"#)),
+            Identifier(String::from("the-word-recursion-has-many-meanings")),
+        ];
+        expected_sequnce(expected, idents);
+    }
+
+    #[test]
+    fn datums() {
+        expected_sequnce(
+            &[
+                DatumOpen("123".into()),
+                OpenParen,
+                Identifier("test".into()),
+                Identifier("test".into()),
+                Identifier("test".into()),
+                DatumRef("123".into()),
+                CloseParen,
+            ],
+            "#123=(test test test #123#)",
+        )
+    }
+
+    #[test]
+    fn string_lit() {
+        expected_sequnce(
+            &[
+                Literal(LiteralKind::Str("test".into())),
+                Literal(LiteralKind::Str("test".into())),
+                Literal(LiteralKind::Str("test".into())),
+                Literal(LiteralKind::Str("test".into())),
+            ],
+            r#""test"  "test"   "test"   "test""#,
+        );
     }
 }
